@@ -20,14 +20,22 @@ import com.dataartisans.flinktraining.exercises.datastream_java.datatypes.TaxiRi
 import com.dataartisans.flinktraining.exercises.datastream_java.sources.TaxiRideSource;
 import com.dataartisans.flinktraining.exercises.datastream_java.utils.ExerciseBase;
 import com.dataartisans.flinktraining.exercises.datastream_java.utils.GeoUtils;
-import com.dataartisans.flinktraining.exercises.datastream_java.utils.MissingSolutionException;
+
+import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.api.java.tuple.Tuple5;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.util.Collector;
 
 /**
  * The "Popular Places" exercise of the Flink training
@@ -63,7 +71,73 @@ public class PopularPlacesExercise extends ExerciseBase {
 				// remove all rides which are not within NYC
 				.filter(new NYCFilter())
 				// match ride to grid cell and event type (start or end)
-				.map(new GridCellMatcher());
+				.map(new GridCellMatcher())
+				.keyBy(new KeySelector<Tuple2<Integer,Boolean>, Tuple2<Integer,Boolean>>() {
+					@Override
+					public Tuple2<Integer, Boolean> getKey(Tuple2<Integer, Boolean> value) throws Exception {
+						return value;
+					}
+				})
+				.timeWindow(Time.minutes(15), Time.minutes(5))
+				.aggregate(
+						new AggregateFunction<Tuple2<Integer,Boolean>, Integer, Integer>() {
+							@Override
+							public Integer createAccumulator() {
+								return 0;
+							}
+
+							@Override
+							public Integer add(Tuple2<Integer, Boolean> value, Integer accumulator) {
+								return accumulator + 1;
+							}
+
+							@Override
+							public Integer getResult(Integer accumulator) {
+								return accumulator;
+							}
+
+							@Override
+							public Integer merge(Integer a, Integer b) {
+								return a + b;
+							}
+						}, 
+						new ProcessWindowFunction<
+							Integer, 
+							Tuple4<Integer, Long, Boolean, Integer>, 
+							Tuple2<Integer,Boolean>, 
+							TimeWindow>() {
+
+							@Override
+							public void process(Tuple2<Integer, Boolean> key,
+									Context context,
+									Iterable<Integer> elements, Collector<Tuple4<Integer, Long, Boolean, Integer>> out)
+									throws Exception {
+								int count = elements.iterator().next();
+								
+								if (count < popThreshold)
+									return;
+								
+								out.collect(new Tuple4<Integer, Long, Boolean, Integer>(
+										key.f0, 
+										context.window().getEnd(), 
+										key.f1, 
+										count));
+							}
+
+						})
+				.map(new MapFunction<Tuple4<Integer,Long,Boolean,Integer>, Tuple5<Float, Float, Long, Boolean, Integer>>() {
+					@Override
+					public Tuple5<Float, Float, Long, Boolean, Integer> map(
+							Tuple4<Integer, Long, Boolean, Integer> value) throws Exception {
+						return new Tuple5<Float, Float, Long, Boolean, Integer>(
+								GeoUtils.getGridCellCenterLon(value.f0), 
+								GeoUtils.getGridCellCenterLat(value.f0), 
+								value.f1, 
+								value.f2, 
+								value.f3);
+					}
+				});
+		
 
 		printOrTest(popularPlaces);
 
@@ -78,7 +152,17 @@ public class PopularPlacesExercise extends ExerciseBase {
 
 		@Override
 		public Tuple2<Integer, Boolean> map(TaxiRide taxiRide) throws Exception {
-			throw new MissingSolutionException();
+			boolean isStart = false;
+			int index = 0;
+			
+			if (taxiRide.isStart) {
+				isStart = true;
+				index = GeoUtils.mapToGridCell(taxiRide.startLon, taxiRide.startLat);
+			} else {
+				index = GeoUtils.mapToGridCell(taxiRide.endLon, taxiRide.endLat);
+			}
+			
+			return new Tuple2<Integer, Boolean>(index, isStart);
 		}
 	}
 
