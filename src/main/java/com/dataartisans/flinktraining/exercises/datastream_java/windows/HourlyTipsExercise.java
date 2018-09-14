@@ -20,10 +20,24 @@ import com.dataartisans.flinktraining.exercises.datastream_java.datatypes.TaxiFa
 import com.dataartisans.flinktraining.exercises.datastream_java.sources.TaxiFareSource;
 import com.dataartisans.flinktraining.exercises.datastream_java.utils.ExerciseBase;
 import com.dataartisans.flinktraining.exercises.datastream_java.utils.MissingSolutionException;
+
+import org.apache.flink.api.common.functions.AggregateFunction;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.api.java.tuple.Tuple4;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction.Context;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.util.Collector;
+import org.joda.time.DateTime;
 
 /**
  * The "Hourly Tips" exercise of the Flink training
@@ -54,13 +68,69 @@ public class HourlyTipsExercise extends ExerciseBase {
 
 		// start the data generator
 		DataStream<TaxiFare> fares = env.addSource(fareSourceOrTest(new TaxiFareSource(input, maxEventDelay, servingSpeedFactor)));
+		
+		DataStream<Tuple3<Long, Long, Float>> hourlyMax = fares
+				// keyBy driver id
+				.map(new MapFunction<TaxiFare, Tuple2<Long, Float>>() {
 
-		throw new MissingSolutionException();
+					@Override
+					public Tuple2<Long, Float> map(TaxiFare value) throws Exception {
+						return new Tuple2<>(value.driverId, value.tip);
+					}
+				})
+				.keyBy((Tuple2<Long, Float> t) -> t.f0)
+				.timeWindow(Time.hours(1))
+				.aggregate(new AddTips(), new WrapWithWindowInfo())
+				.timeWindowAll(Time.hours(1))
+				.maxBy(2);
 
-//		printOrTest(hourlyMax);
+		printOrTest(hourlyMax);
 
 		// execute the transformation pipeline
-//		env.execute("Hourly Tips (java)");
+		env.execute("Hourly Tips (java)");
 	}
 
+	/**
+	 * Adds up the tips.
+	 */
+	public static class AddTips implements AggregateFunction<
+			Tuple2<Long, Float>, // input type
+			Float,    // accumulator type
+			Float     // output type
+		>
+
+	{
+		@Override
+		public Float createAccumulator() {
+			return 0F;
+		}
+
+		@Override
+		public Float add(Tuple2<Long, Float> fare, Float aFloat) {
+			return fare.f1 + aFloat;
+		}
+
+		@Override
+		public Float getResult(Float aFloat) {
+			return aFloat;
+		}
+
+		@Override
+		public Float merge(Float aFloat, Float accumulator) {
+			return aFloat + accumulator;
+		}
+	}
+
+	/*
+	 * Wraps the pre-aggregated result into a tuple along with the window's timestamp and key.
+	 */
+	public static class WrapWithWindowInfo extends ProcessWindowFunction<
+			Float, Tuple3<Long, Long, Float>, Long, TimeWindow> {
+		@Override
+		public void process(Long key, Context context, Iterable<Float> elements, Collector<Tuple3<Long, Long, Float>> out) throws Exception {
+			Float sumOfTips = elements.iterator().next();
+			out.collect(new Tuple3<>(context.window().getEnd(), key, sumOfTips));
+		}
+	}
+	
 }
