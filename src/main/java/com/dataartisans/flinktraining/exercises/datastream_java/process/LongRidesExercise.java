@@ -18,8 +18,10 @@ package com.dataartisans.flinktraining.exercises.datastream_java.process;
 
 import com.dataartisans.flinktraining.exercises.datastream_java.datatypes.TaxiRide;
 import com.dataartisans.flinktraining.exercises.datastream_java.sources.TaxiRideSource;
-import com.dataartisans.flinktraining.exercises.datastream_java.utils.MissingSolutionException;
 import com.dataartisans.flinktraining.exercises.datastream_java.utils.ExerciseBase;
+
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.TimeCharacteristic;
@@ -68,18 +70,43 @@ public class LongRidesExercise extends ExerciseBase {
 
 	public static class MatchFunction extends KeyedProcessFunction<Long, TaxiRide, TaxiRide> {
 
+		private transient ValueState<TaxiRide> state;
+		
 		@Override
 		public void open(Configuration config) throws Exception {
-			throw new MissingSolutionException();
+			state = getRuntimeContext()
+					.getState(new ValueStateDescriptor<TaxiRide>(
+							"ride-state",
+							TaxiRide.class));
 		}
 
 		@Override
 		public void processElement(TaxiRide ride, Context context, Collector<TaxiRide> out) throws Exception {
 			TimerService timerService = context.timerService();
+			
+			if (ride.isStart) {
+				// check if END already arrived; reject if so; otherwise add to state and set timer
+				if (state.value() == null) {
+					state.update(ride);
+					timerService.registerEventTimeTimer(ride.getEventTime() + (2*60*60*1000));
+				}
+			} else {
+				// check if corresponding START is processed
+				if (state.value() != null) {
+					timerService.deleteEventTimeTimer(state.value().getEventTime() + (2*60*60*1000));
+				}
+				
+				state.update(ride);
+			}
 		}
 
 		@Override
 		public void onTimer(long timestamp, OnTimerContext context, Collector<TaxiRide> out) throws Exception {
+			if (state.value()!= null && state.value().isStart) {
+				out.collect(state.value());
+			}
+			
+			state.clear();
 		}
 	}
 }
