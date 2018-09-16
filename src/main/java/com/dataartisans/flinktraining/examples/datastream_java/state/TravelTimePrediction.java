@@ -55,7 +55,7 @@ public class TravelTimePrediction {
 	public static void main(String[] args) throws Exception {
 
 		ParameterTool params = ParameterTool.fromArgs(args);
-		final String input = params.getRequired("input");
+		final String input = "/home/ruslan/Desktop/Course/nycTaxiRides.gz"; //params.getRequired("input");
 
 		final int servingSpeedFactor = 600; // events of 10 minutes are served in 1 second
 
@@ -132,7 +132,7 @@ public class TravelTimePrediction {
 			TaxiRide ride = val.f1;
 			// compute distance and direction
 			double distance = GeoUtils.getEuclideanDistance(ride.startLon, ride.startLat, ride.endLon, ride.endLat);
-			int direction = GeoUtils.getDirectionAngle(ride.endLon, ride.endLat, ride.startLon, ride.startLat);
+			int direction = GeoUtils.getDirectionAngle(ride.startLon, ride.startLat, ride.endLon, ride.endLat);
 
 			if (ride.isStart) {
 				// we have a start event: Predict travel time
